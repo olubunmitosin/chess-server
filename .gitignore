@@ -3,7 +3,7 @@
 # php
 /composer.lock
 /vendor/
-
+.idea
 /data/players.json
 /data/tournaments.json
 
