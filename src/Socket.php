@@ -7,6 +7,8 @@ use Chess\Game;
 use Chess\Grandmaster;
 use Chess\Movetext;
 use Chess\FEN\BoardToStr;
+use Chess\FEN\StrToBoard;
+use Chess\PGN\AN\Color;
 use Chess\Randomizer\Randomizer;
 use Chess\Randomizer\Checkmate\TwoBishopsRandomizer;
 use ChessServer\Command\AcceptPlayRequestCommand;
@@ -14,7 +16,6 @@ use ChessServer\Command\DrawCommand;
 use ChessServer\Command\LeaveCommand;
 use ChessServer\Command\OnlineGamesCommand;
 use ChessServer\Command\PlayFenCommand;
-use ChessServer\Command\QuitCommand;
 use ChessServer\Command\RandomCheckmateCommand;
 use ChessServer\Command\RandomGameCommand;
 use ChessServer\Command\RematchCommand;
@@ -143,16 +144,6 @@ class Socket implements MessageComponentInterface
                     $this->gameModes[$from->resourceId]->res($this->parser->argv, $cmd)
                 );
             }
-        } elseif (is_a($cmd, QuitCommand::class)) {
-            if ($gameMode) {
-                unset($this->gameModes[$from->resourceId]);
-                return $this->sendToOne($from->resourceId, [
-                    $cmd->name => 'Good bye!',
-                ]);
-            }
-            return $this->sendToOne($from->resourceId, [
-                $cmd->name => 'A game needs to be started first for this command to be allowed.',
-            ]);
         } elseif (is_a($cmd, RandomCheckmateCommand::class)) {
             try {
                 $items = json_decode(stripslashes($this->parser->argv[2]), true);
@@ -262,11 +253,6 @@ class Socket implements MessageComponentInterface
                 ]);
             }
         } elseif (is_a($cmd, StartCommand::class)) {
-            if ($gameMode) {
-                return $this->sendToOne($from->resourceId, [
-                    $cmd->name => 'Game already started.',
-                ]);
-            }
             if (AnalysisMode::NAME === $this->parser->argv[1]) {
                 $this->gameModes[$from->resourceId] = new AnalysisMode(
                     new Game(Game::MODE_ANALYSIS),
@@ -375,16 +361,38 @@ class Socket implements MessageComponentInterface
                     ],
                 ];
             } elseif (StockfishMode::NAME === $this->parser->argv[1]) {
-                $this->gameModes[$from->resourceId] = new StockfishMode(
-                    new Game(Game::MODE_STOCKFISH, $this->gm),
-                    [$from->resourceId]
-                );
-                $res = [
-                    $cmd->name => [
-                        'mode' => StockfishMode::NAME,
-                        'color' => $this->parser->argv[2],
-                    ],
-                ];
+                try {
+                    $board = (new StrToBoard($this->parser->argv[2]))->create();
+                    $game = (new Game(Game::MODE_STOCKFISH, $this->gm))->setBoard($board);
+                    $this->gameModes[$from->resourceId] = new StockfishMode($game, [$from->resourceId]);
+                    $res = [
+                        $cmd->name => [
+                            'mode' => StockfishMode::NAME,
+                            'color' => $game->getBoard()->getTurn(),
+                            'fen' => $game->getBoard()->toFen(),
+                        ],
+                    ];
+                } catch (\Throwable $e) {
+                    if ($this->parser->argv[2] === Color::W || $this->parser->argv[2] === Color::B) {
+                        $this->gameModes[$from->resourceId] = new StockfishMode(
+                            new Game(Game::MODE_STOCKFISH, $this->gm),
+                            [$from->resourceId]
+                        );
+                        $res = [
+                            $cmd->name => [
+                                'mode' => StockfishMode::NAME,
+                                'color' => $this->parser->argv[2],
+                            ],
+                        ];
+                    } else {
+                        $res = [
+                            $cmd->name => [
+                                'mode' => StockfishMode::NAME,
+                                'message' => 'The Stockfish mode could not be started.',
+                            ],
+                        ];
+                    }
+                }
             }
             return $this->sendToOne($from->resourceId, $res);
         } elseif (is_a($cmd, TakebackCommand::class)) {
